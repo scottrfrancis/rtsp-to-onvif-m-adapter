@@ -1,0 +1,56 @@
+name: Bug report
+description: Something doesn't work as documented
+labels: ["bug"]
+body:
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you expect, and what happened instead?
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: The exact command(s) and config. Minimal is best.
+      placeholder: |
+        1. python -m onvif_m rtsp://host/stream --detector mock --sink stdout
+        2. ...
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version / commit
+      description: Output of `pip show onvif-m-producer` or the git SHA.
+    validations:
+      required: true
+  - type: dropdown
+    id: detector
+    attributes:
+      label: Detector backend
+      options: [mock, torchvision, yolov8, other/n-a]
+    validations:
+      required: false
+  - type: dropdown
+    id: publisher
+    attributes:
+      label: Publisher backend
+      options: [file, stdout, mqtt, other/n-a]
+    validations:
+      required: false
+  - type: textarea
+    id: env
+    attributes:
+      label: Environment
+      description: OS, Python version, device (cpu/cuda/mps), ffmpeg version if capture-related.
+    validations:
+      required: false
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / traceback
+      render: shell
+    validations:
+      required: false

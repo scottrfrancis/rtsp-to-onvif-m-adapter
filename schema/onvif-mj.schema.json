@@ -1,0 +1,103 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/scottrfrancis/rtsp-to-onvif-m-adapter/blob/main/schema/onvif-mj.schema.json",
+  "title": "onvif-mj metadata payload (NON-NORMATIVE)",
+  "description": "JSON Schema for the onvif-mj payload produced by rtsp-to-onvif-m-adapter. NON-NORMATIVE: this is an inference from the ONVIF `metadatastream.xsd` and from this project's implementation — it is NOT an official ONVIF artifact, and the ONVIF XSD remains the authoritative source of conformance. The schema is intentionally OPEN: `additionalProperties` is allowed at every level, so a producer or consumer may add optional fields (for example a `ReID` descriptor on an Object) without breaking validation. To constrain such extensions, define your own schema (extend this one via `allOf`/`$ref`, or supply your own).",
+  "$comment": "Non-normative. Inferred from ONVIF metadatastream.xsd + this implementation. The XSD is authoritative; this schema is a convenience for JSON consumers and is deliberately extensible.",
+  "type": "object",
+  "required": ["Frame"],
+  "additionalProperties": true,
+  "properties": {
+    "Frame": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/Frame" }
+    }
+  },
+  "$defs": {
+    "Frame": {
+      "type": "object",
+      "required": ["@UtcTime", "@Source"],
+      "additionalProperties": true,
+      "properties": {
+        "@UtcTime": {
+          "type": "string",
+          "description": "xs:dateTime in UTC, millisecond precision (e.g. 2021-10-05T15:13:27.321Z)"
+        },
+        "@Source": { "type": "string" },
+        "Object": {
+          "type": "array",
+          "description": "Omitted entirely for a liveness-only (no detections) frame.",
+          "items": { "$ref": "#/$defs/Object" }
+        }
+      }
+    },
+    "Object": {
+      "type": "object",
+      "required": ["@ObjectId", "Appearance"],
+      "additionalProperties": true,
+      "$comment": "Extension point: add optional fields here (e.g. a ReID descriptor); additionalProperties permits it.",
+      "properties": {
+        "@ObjectId": { "type": "integer" },
+        "Appearance": { "$ref": "#/$defs/Appearance" }
+      }
+    },
+    "Appearance": {
+      "type": "object",
+      "required": ["Shape"],
+      "additionalProperties": true,
+      "properties": {
+        "Shape": { "$ref": "#/$defs/Shape" },
+        "Class": { "$ref": "#/$defs/Class" }
+      }
+    },
+    "Shape": {
+      "type": "object",
+      "required": ["BoundingBox", "CenterOfGravity"],
+      "additionalProperties": true,
+      "properties": {
+        "BoundingBox": { "$ref": "#/$defs/BoundingBox" },
+        "CenterOfGravity": { "$ref": "#/$defs/Vector" }
+      }
+    },
+    "BoundingBox": {
+      "type": "object",
+      "required": ["@left", "@top", "@right", "@bottom"],
+      "additionalProperties": true,
+      "properties": {
+        "@left": { "type": "number" },
+        "@top": { "type": "number" },
+        "@right": { "type": "number" },
+        "@bottom": { "type": "number" }
+      }
+    },
+    "Vector": {
+      "type": "object",
+      "required": ["@x", "@y"],
+      "additionalProperties": true,
+      "properties": {
+        "@x": { "type": "number" },
+        "@y": { "type": "number" }
+      }
+    },
+    "Class": {
+      "type": "object",
+      "required": ["Type"],
+      "additionalProperties": true,
+      "properties": {
+        "Type": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/ClassType" }
+        }
+      }
+    },
+    "ClassType": {
+      "type": "object",
+      "required": ["@Likelihood", "#text"],
+      "additionalProperties": true,
+      "properties": {
+        "@Likelihood": { "type": "number", "minimum": 0, "maximum": 1 },
+        "#text": { "type": "string" }
+      }
+    }
+  }
+}

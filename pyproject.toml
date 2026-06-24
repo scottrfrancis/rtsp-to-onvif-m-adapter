@@ -1,0 +1,73 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+# Distribution name on PyPI; the importable package is `onvif_m`.
+name = "onvif-m-producer"
+version = "0.1.0"
+description = "RTSP → object detection → ONVIF Profile-M metadata producer"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+authors = [{ name = "Scott Francis", email = "scott.russell.francis@gmail.com" }]
+keywords = ["onvif", "profile-m", "rtsp", "object-detection", "metadata", "video-analytics"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Multimedia :: Video",
+    "Topic :: Scientific/Engineering :: Image Recognition",
+]
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/scottrfrancis/rtsp-to-onvif-m-adapter"
+Repository = "https://github.com/scottrfrancis/rtsp-to-onvif-m-adapter"
+Issues = "https://github.com/scottrfrancis/rtsp-to-onvif-m-adapter/issues"
+Changelog = "https://github.com/scottrfrancis/rtsp-to-onvif-m-adapter/blob/main/CHANGELOG.md"
+
+[project.optional-dependencies]
+# RTSP frame capture/decode (the runner needs these even with --detector mock).
+capture = ["numpy", "pillow"]
+# torchvision (BSD-3) is the default detector; heavy, so it's an extra.
+detect = ["torch", "torchvision", "pillow", "numpy"]
+mqtt = ["paho-mqtt>=2.0"]
+compliance = ["xmlschema>=3.0", "jsonschema>=4.0"]
+dev = ["pytest", "pytest-asyncio", "ruff", "mypy", "xmlschema>=3.0",
+       "jsonschema>=4.0", "paho-mqtt>=2.0", "numpy", "pillow"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/onvif_m"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+files = ["src"]
+
+# Optional heavy detector backends are not installed in the lint/type-check
+# environment (they live in the `detect` extra), so treat them as untyped
+# rather than failing on a missing import.
+[[tool.mypy.overrides]]
+module = ["torch.*", "torchvision.*", "ultralytics.*"]
+ignore_missing_imports = true
+
+# numpy's bundled stubs use PEP 695 `type` syntax (3.12+); don't parse them
+# under our 3.11 target. We treat frames as untyped arrays regardless.
+[[tool.mypy.overrides]]
+module = ["numpy", "numpy.*"]
+follow_imports = "skip"
+follow_imports_for_stubs = true

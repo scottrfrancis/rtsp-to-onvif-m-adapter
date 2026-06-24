@@ -1,0 +1,36 @@
+# Self-contained demo: a synthetic RTSP source → the producer → MQTT → a
+# verification subscriber. Run:  docker compose up --build
+# Watch the `sub` service: it prints one onvif-mj payload per captured frame.
+services:
+  mqtt:
+    image: eclipse-mosquitto:2
+    command: >
+      sh -c "printf 'listener 1883 0.0.0.0\nallow_anonymous true\n'
+      > /mosquitto/config/mosquitto.conf && exec mosquitto -c /mosquitto/config/mosquitto.conf"
+    ports: ["1883:1883"]
+
+  rtsp:
+    image: bluenviron/mediamtx:latest
+
+  # Publish a synthetic test pattern into the RTSP server (reuses our image's ffmpeg).
+  publisher:
+    build: .
+    command: >
+      ffmpeg -re -stream_loop -1 -f lavfi -i testsrc=size=320x240:rate=10
+      -c:v libx264 -pix_fmt yuv420p -g 10 -f rtsp -rtsp_transport tcp rtsp://rtsp:8554/test
+    depends_on: [rtsp]
+    restart: on-failure
+
+  producer:
+    build: .
+    command: >
+      python -m onvif_m rtsp://rtsp:8554/test --detector mock
+      --sink mqtt --mqtt-host mqtt --fps 1 --health-port 8080 --log-level INFO
+    depends_on: [mqtt, rtsp, publisher]
+    ports: ["8080:8080"]   # GET /healthz
+
+  # Verification: print every published metadata payload.
+  sub:
+    image: eclipse-mosquitto:2
+    command: sh -c "sleep 6; mosquitto_sub -h mqtt -t 'onvif-m/#' -v"
+    depends_on: [mqtt]

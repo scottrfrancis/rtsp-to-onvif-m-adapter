@@ -1,0 +1,27 @@
+name: Feature request
+description: Propose a new detector/publisher backend or capability
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem / use case
+      description: What are you trying to do that the producer doesn't support today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: >
+        New backends should fit the existing Detector/Publisher protocols with
+        lazy heavy-dependency imports. Note any new dependency and its license
+        (the core stays Apache-2.0 and AGPL-free).
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+    validations:
+      required: false

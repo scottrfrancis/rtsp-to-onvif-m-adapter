@@ -1,0 +1,39 @@
+{
+  "Frame": [
+    {
+      "@UtcTime": "2021-10-05T15:13:27.321Z",
+      "@Source": "MyClassifier",
+      "Object": [
+        {
+          "@ObjectId": 15,
+          "Appearance": {
+            "Shape": {
+              "BoundingBox": {
+                "@left": -0.9375,
+                "@top": -0.6667,
+                "@right": -0.6875,
+                "@bottom": -0.875
+              },
+              "CenterOfGravity": {
+                "@x": -0.8125,
+                "@y": -0.7917
+              }
+            },
+            "Class": {
+              "Type": [
+                {
+                  "@Likelihood": 0.8,
+                  "#text": "Human"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "@UtcTime": "2021-10-05T15:13:28.321Z",
+      "@Source": "MyClassifier"
+    }
+  ]
+}

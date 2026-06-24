@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+build/
+dist/
+.venv/
+venv/
+
+# Broken/partial git dirs from init (sandbox artifact)
+.git-broken*/
+.git-partial*/
+
+# Detector model weights (downloaded at runtime)
+*.pt
+models/
+
+# Test fixtures (binaries) — regenerate via tests/fixtures/fetch_samples.sh
+tests/fixtures/*.avi
+tests/fixtures/*.mp4
+tests/fixtures/**/*.mp4
+tests/fixtures/**/*.jpg
+tests/fixtures/coco/
