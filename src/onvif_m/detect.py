@@ -294,6 +294,7 @@ class OpenVINODetector:
         class_map: dict[str, str] | None = None,
         min_size: int | None = None,
         max_size: int | None = None,
+        num_threads: int = 0,
         _compiled: Any | None = None,
         _categories: list[str] | None = None,
     ):
@@ -302,6 +303,7 @@ class OpenVINODetector:
         self._class_map = class_map
         self._min_size = min_size
         self._max_size = max_size
+        self._num_threads = num_threads
         self._compiled: Any = _compiled
         self._core: Any = None
         self._wrapped: Any = None
@@ -348,9 +350,14 @@ class OpenVINODetector:
 
         example = torch.zeros(1, 3, height, width)
         ov_model = ov.convert_model(self._wrapped, example_input=example)
-        self._compiled = self._core.compile_model(
-            ov_model, "CPU", {"PERFORMANCE_HINT": "LATENCY"}
-        )
+        # Default LATENCY spreads ONE inference across all cores — best for a single
+        # camera, but N such detectors then fight for every core. With num_threads
+        # set, cap threads + a single stream so N independent detectors PACK onto the
+        # cores (each ~num_threads) — required for a multi-camera box.
+        cfg: dict[str, str] = {"PERFORMANCE_HINT": "LATENCY"}
+        if self._num_threads and self._num_threads > 0:
+            cfg = {"INFERENCE_NUM_THREADS": str(self._num_threads), "NUM_STREAMS": "1"}
+        self._compiled = self._core.compile_model(ov_model, "CPU", cfg)
 
     def detect(self, frame: Any) -> list[DetectedObject]:
         import numpy as np
@@ -380,6 +387,10 @@ class OpenVINODetector:
     def max_size(self) -> int | None:
         return self._max_size
 
+    @property
+    def num_threads(self) -> int:
+        return self._num_threads
+
 
 def create_detector(
     backend: str = "torchvision",
@@ -390,11 +401,15 @@ def create_detector(
     device: str = "auto",
     min_size: int | None = None,
     max_size: int | None = None,
+    num_threads: int = 0,
 ) -> Detector:
     """Factory. ``backend`` ∈ {``mock``, ``torchvision`` (default), ``yolov8``,
     ``openvino``}. ``device`` ∈ {``auto``, ``cpu``, ``cuda``, ``mps``} (torchvision).
     ``min_size``/``max_size`` set the model's input-resize resolution for the
-    torchvision and openvino backends (the cost/precision lever)."""
+    torchvision and openvino backends (the cost/precision lever).
+    ``num_threads`` (openvino only) caps CPU threads per detector so multiple
+    detectors pack onto a multi-camera box instead of each grabbing every core;
+    0 (default) keeps the LATENCY hint (best single-camera)."""
     if backend == "mock":
         return MockDetector(suppress_biometrics=suppress_biometrics)
     if backend == "torchvision":
@@ -422,6 +437,7 @@ def create_detector(
             class_map=class_map,
             min_size=min_size,
             max_size=max_size,
+            num_threads=num_threads,
         )
     factory = plugins.load_plugin(plugins.DETECTORS, backend)
     if factory is not None:
