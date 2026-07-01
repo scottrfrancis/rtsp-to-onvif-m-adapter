@@ -16,12 +16,20 @@ suite need neither — the pixel→ONVIF mapping is exercised with injected fake
 from __future__ import annotations
 
 import logging
+import threading
 from typing import Any, Protocol, runtime_checkable
 
 from . import plugins
 from .model import DetectedObject, from_pixel_bbox
 
 logger = logging.getLogger(__name__)
+
+# torch.jit.trace / ov.convert_model are NOT thread-safe: two detectors compiling
+# their IR at the same instant corrupt each other's trace (OV's two-pass compare
+# then throws "dtype float64 != float32"). Serialize compilation process-wide so a
+# multi-camera host can start N detectors concurrently. Inference on an already-
+# compiled model is thread-safe and stays parallel.
+_COMPILE_LOCK = threading.Lock()
 
 # Detector backends shipped in core; third-party backends register via the
 # ``onvif_m.detectors`` entry-point group (see ``plugins``).
@@ -348,16 +356,22 @@ class OpenVINODetector:
         import openvino as ov
         import torch
 
-        example = torch.zeros(1, 3, height, width)
-        ov_model = ov.convert_model(self._wrapped, example_input=example)
-        # Default LATENCY spreads ONE inference across all cores — best for a single
-        # camera, but N such detectors then fight for every core. With num_threads
-        # set, cap threads + a single stream so N independent detectors PACK onto the
-        # cores (each ~num_threads) — required for a multi-camera box.
-        cfg: dict[str, str] = {"PERFORMANCE_HINT": "LATENCY"}
-        if self._num_threads and self._num_threads > 0:
-            cfg = {"INFERENCE_NUM_THREADS": str(self._num_threads), "NUM_STREAMS": "1"}
-        self._compiled = self._core.compile_model(ov_model, "CPU", cfg)
+        # Serialize the trace+convert across all detectors (see _COMPILE_LOCK).
+        # Double-check inside the lock so only the first waiter compiles.
+        with _COMPILE_LOCK:
+            if self._compiled is not None:
+                return
+            example = torch.zeros(1, 3, height, width)
+            ov_model = ov.convert_model(self._wrapped, example_input=example)
+            # Default LATENCY spreads ONE inference across all cores — best for a
+            # single camera, but N such detectors then fight for every core. With
+            # num_threads set, cap threads + a single stream so N independent
+            # detectors PACK onto the cores (each ~num_threads) — required for a
+            # multi-camera box.
+            cfg: dict[str, str] = {"PERFORMANCE_HINT": "LATENCY"}
+            if self._num_threads and self._num_threads > 0:
+                cfg = {"INFERENCE_NUM_THREADS": str(self._num_threads), "NUM_STREAMS": "1"}
+            self._compiled = self._core.compile_model(ov_model, "CPU", cfg)
 
     def detect(self, frame: Any) -> list[DetectedObject]:
         import numpy as np
