@@ -3,6 +3,25 @@
 Format loosely follows [Keep a Changelog](https://keepachangelog.com); versions
 follow [SemVer](https://semver.org).
 
+## [0.2.0]
+
+### Added
+- **`min_size` / `max_size` passthrough** on `create_detector` and
+  `TorchvisionDetector` — sets the FPN/R-CNN input-resize resolution (the
+  precision/latency lever). Default behavior unchanged; fixed-size models
+  (ssd/ssdlite) ignore it.
+- **`OpenVINODetector` backend** (`backend="openvino"`, opt-in like YOLOv8) —
+  converts a torchvision COCO detector to OpenVINO IR at load and runs it on the
+  OpenVINO CPU runtime (`LATENCY` hint). Measured ~1.7–2.2× faster than eager
+  torch on AVX2 CPUs; IR compiled lazily at the first frame's resolution. New
+  optional extra `[openvino]`. INT8 intentionally not offered (slower on CPUs
+  without VNNI).
+
+### Notes
+- Output mapping and coordinates are unchanged; the OpenVINO backend reuses
+  `torchvision_to_objects`, so it agrees with the eager-torch backend
+  detection-for-detection.
+
 ## [0.1.0] — 2026-06-24
 
 First public release: a vendor-neutral, single-stream **ONVIF Profile-M metadata
