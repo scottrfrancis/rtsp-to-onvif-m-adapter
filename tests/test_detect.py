@@ -183,3 +183,17 @@ class TestOpenVINODetector:
                                min_size=800, max_size=1333)
         assert det.min_size == 800
         assert det.max_size == 1333
+
+    def test_num_threads_default_zero(self):
+        from onvif_m.detect import OpenVINODetector
+
+        det = OpenVINODetector(_compiled=_FakeCompiled([], [], []), _categories=COCO_CATS)
+        assert det.num_threads == 0
+
+    def test_stores_num_threads(self):
+        # The multi-camera thread cap: N detectors pack the box's cores.
+        from onvif_m.detect import OpenVINODetector
+
+        det = OpenVINODetector(_compiled=_FakeCompiled([], [], []), _categories=COCO_CATS,
+                               num_threads=1)
+        assert det.num_threads == 1

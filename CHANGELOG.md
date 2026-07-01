@@ -3,6 +3,17 @@
 Format loosely follows [Keep a Changelog](https://keepachangelog.com); versions
 follow [SemVer](https://semver.org).
 
+## [0.2.1]
+
+### Added
+- **`num_threads` knob** on `create_detector` and `OpenVINODetector` (openvino
+  backend only). When `> 0`, compiles the IR with
+  `{INFERENCE_NUM_THREADS: n, NUM_STREAMS: 1}` instead of the `LATENCY` hint,
+  capping CPU threads per detector so **multiple detectors pack onto a
+  multi-camera box** instead of each spreading one inference across every core.
+  Default `0` keeps the `LATENCY` hint (best single-camera latency) — behavior
+  unchanged for existing callers.
+
 ## [0.2.0]
 
 ### Added

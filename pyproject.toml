@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 # Distribution name on PyPI; the importable package is `onvif_m`.
 name = "onvif-m-producer"
-version = "0.2.0"
+version = "0.2.1"
 description = "RTSP → object detection → ONVIF Profile-M metadata producer"
 readme = "README.md"
 requires-python = ">=3.11"

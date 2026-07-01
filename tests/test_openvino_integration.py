@@ -34,6 +34,16 @@ def test_openvino_converts_and_detects():
     assert isinstance(objs, list)  # ran end-to-end through OV IR
 
 
+def test_openvino_num_threads_reaches_compiled_model():
+    """num_threads must cap the compiled model's INFERENCE_NUM_THREADS — the
+    multi-camera pack fix. 0 (default) leaves the LATENCY hint alone."""
+    det = create_detector(backend="openvino", model="fasterrcnn_mobilenet_v3_large_fpn",
+                          min_size=320, max_size=640, conf=0.0, num_threads=1)
+    assert det.num_threads == 1
+    det.detect(_frame())  # forces first-frame compile with the capped config
+    assert det._compiled.get_property("INFERENCE_NUM_THREADS") == 1
+
+
 def test_openvino_and_torch_agree_on_object_count():
     """FP32 OV should be numerically ~equal to eager torch (same detections)."""
     frame = _frame()
