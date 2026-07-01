@@ -301,6 +301,163 @@ class Yolov8Detector:
         return self._suppress_biometrics
 
 
+# COCO 80 contiguous class names (YOLOX / ultralytics ordering; person == index 0).
+_COCO80 = [
+    "person", "bicycle", "car", "motorcycle", "airplane", "bus", "train", "truck",
+    "boat", "traffic light", "fire hydrant", "stop sign", "parking meter", "bench",
+    "bird", "cat", "dog", "horse", "sheep", "cow", "elephant", "bear", "zebra",
+    "giraffe", "backpack", "umbrella", "handbag", "tie", "suitcase", "frisbee", "skis",
+    "snowboard", "sports ball", "kite", "baseball bat", "baseball glove", "skateboard",
+    "surfboard", "tennis racket", "bottle", "wine glass", "cup", "fork", "knife",
+    "spoon", "bowl", "banana", "apple", "sandwich", "orange", "broccoli", "carrot",
+    "hot dog", "pizza", "donut", "cake", "chair", "couch", "potted plant", "bed",
+    "dining table", "toilet", "tv", "laptop", "mouse", "remote", "keyboard",
+    "cell phone", "microwave", "oven", "toaster", "sink", "refrigerator", "book",
+    "clock", "vase", "scissors", "teddy bear", "hair drier", "toothbrush",
+]
+
+
+def _nms(boxes: Any, scores: Any, iou_thr: float = 0.5) -> list[int]:
+    """Greedy class-agnostic NMS on xyxy numpy boxes; returns kept indices."""
+    import numpy as np
+    idx = scores.argsort()[::-1]
+    keep: list[int] = []
+    while len(idx):
+        i = int(idx[0])
+        keep.append(i)
+        if len(idx) == 1:
+            break
+        rest = idx[1:]
+        xx1 = np.maximum(boxes[i, 0], boxes[rest, 0])
+        yy1 = np.maximum(boxes[i, 1], boxes[rest, 1])
+        xx2 = np.minimum(boxes[i, 2], boxes[rest, 2])
+        yy2 = np.minimum(boxes[i, 3], boxes[rest, 3])
+        inter = np.maximum(0, xx2 - xx1) * np.maximum(0, yy2 - yy1)
+        ai = (boxes[i, 2] - boxes[i, 0]) * (boxes[i, 3] - boxes[i, 1])
+        ar = (boxes[rest, 2] - boxes[rest, 0]) * (boxes[rest, 3] - boxes[rest, 1])
+        idx = rest[inter / (ai + ar - inter + 1e-9) < iou_thr]
+    return keep
+
+
+def yolox_decode(
+    output: Any, input_size: int, ratio: float, width: int, height: int,
+    conf_floor: float, categories: list[str],
+    class_map: dict[str, str] | None = None, keep_classes: set[str] | None = None,
+    iou_thr: float = 0.5,
+) -> list[DetectedObject]:
+    """Decode a raw YOLOX head ``[N, 5+num_classes]`` (grid strides 8/16/32, letterboxed
+    to ``input_size`` with scale ``ratio``, obj+cls already sigmoid'd) into ONVIF objects
+    in the original ``width``×``height`` pixel space. ``keep_classes`` allowlists labels."""
+    import numpy as np
+    out = np.asarray(output, dtype=np.float32)
+    if out.ndim == 3:
+        out = out[0]
+    grids = []
+    strides = []
+    for s in (8, 16, 32):
+        gg = input_size // s
+        xv, yv = np.meshgrid(np.arange(gg), np.arange(gg))
+        grids.append(np.stack((xv, yv), 2).reshape(-1, 2))
+        strides.append(np.full((gg * gg, 1), s))
+    g = np.concatenate(grids, 0)
+    st = np.concatenate(strides, 0)
+    xy = (out[:, :2] + g) * st
+    wh = np.exp(out[:, 2:4]) * st
+    cls = out[:, 5:]
+    cls_id = cls.argmax(1)
+    scores = out[:, 4] * cls[np.arange(len(cls)), cls_id]
+    m = scores >= conf_floor
+    xy, wh, scores, cls_id = xy[m], wh[m], scores[m], cls_id[m]
+    if not len(xy):
+        return []
+    xyxy = np.stack([xy[:, 0] - wh[:, 0] / 2, xy[:, 1] - wh[:, 1] / 2,
+                     xy[:, 0] + wh[:, 0] / 2, xy[:, 1] + wh[:, 1] / 2], 1) / ratio
+    objects: list[DetectedObject] = []
+    oid = 0
+    for k in _nms(xyxy, scores, iou_thr):
+        cid = int(cls_id[k])
+        raw = categories[cid] if cid < len(categories) else str(cid)
+        if keep_classes is not None and raw.lower() not in keep_classes:
+            continue
+        x1, y1, x2, y2 = (float(v) for v in xyxy[k])
+        objects.append(
+            _object(oid, raw, float(scores[k]), x1, y1, x2, y2, width, height, class_map))
+        oid += 1
+    return objects
+
+
+class YoloxDetector:
+    """Opt-in YOLOX backend (Apache-2.0), single-stage, via ONNX Runtime (CPU).
+
+    Pure ONNX Runtime + numpy (no torch/torchvision). Single-stage → immune to the
+    two-stage ``roi_heads`` reshape crash that rules out traced Faster R-CNN at reduced
+    resolution. ``model`` is a path to a YOLOX ``.onnx`` with a fixed square input
+    (416 for nano/tiny, 640 for s/m/l/x). ``num_threads`` (>0) caps ORT intra-op threads
+    so multiple detectors pack onto a CPU box. Needs ``.[yolox]``."""
+
+    def __init__(
+        self,
+        model_path: str = "yolox_s.onnx",
+        conf: float = 0.25,
+        suppress_biometrics: bool = True,
+        class_map: dict[str, str] | None = None,
+        keep_classes: set[str] | None = None,
+        categories: list[str] | None = None,
+        num_threads: int = 0,
+        iou: float = 0.5,
+        _session: Any | None = None,
+    ):
+        self._conf = conf
+        self._suppress_biometrics = suppress_biometrics
+        self._class_map = class_map
+        self._keep_classes = keep_classes
+        self._categories = categories or _COCO80
+        self._iou = iou
+        if _session is not None:
+            self._session = _session
+        else:
+            try:
+                import onnxruntime as ort
+            except ImportError as exc:  # pragma: no cover - import guard
+                raise ImportError(
+                    "YOLOX backend needs onnxruntime: pip install '.[yolox]'"
+                ) from exc
+            so = ort.SessionOptions()
+            if num_threads and num_threads > 0:
+                so.intra_op_num_threads = num_threads
+            self._session = ort.InferenceSession(
+                model_path, so, providers=["CPUExecutionProvider"])
+        inp = self._session.get_inputs()[0]
+        self._input_name = inp.name
+        self._size = inp.shape[2] if isinstance(inp.shape[2], int) else 640
+
+    def _preprocess(self, frame: Any) -> tuple[Any, float]:
+        import numpy as np
+        from PIL import Image
+        h, w = frame.shape[:2]
+        r = min(self._size / h, self._size / w)
+        nh, nw = int(h * r), int(w * r)
+        im = np.asarray(Image.fromarray(frame).resize((nw, nh)))
+        pad = np.ones((self._size, self._size, 3), np.float32) * 114.0
+        pad[:nh, :nw] = im
+        return pad.transpose(2, 0, 1)[None].astype(np.float32), r
+
+    def detect(self, frame: Any) -> list[DetectedObject]:
+        height, width = frame.shape[:2]
+        x, ratio = self._preprocess(frame)
+        out = self._session.run(None, {self._input_name: x})[0]
+        return yolox_decode(out, self._size, ratio, width, height, self._conf,
+                            self._categories, self._class_map, self._keep_classes, self._iou)
+
+    @property
+    def suppress_biometrics(self) -> bool:
+        return self._suppress_biometrics
+
+    @property
+    def input_size(self) -> int:
+        return self._size
+
+
 class OpenVINODetector:
     """Opt-in OpenVINO-FP32 backend for torchvision COCO detectors.
 
@@ -440,7 +597,8 @@ def create_detector(
     keep_classes: list[str] | None = None,
 ) -> Detector:
     """Factory. ``backend`` ∈ {``mock``, ``torchvision`` (default), ``yolov8``,
-    ``openvino``}. ``device`` ∈ {``auto``, ``cpu``, ``cuda``, ``mps``} (torchvision).
+    ``yolox`` (ONNX+ORT, Apache-2.0, single-stage), ``openvino``}.
+    ``device`` ∈ {``auto``, ``cpu``, ``cuda``, ``mps``} (torchvision).
     ``min_size``/``max_size`` set the model's input-resize resolution for the
     torchvision and openvino backends (the cost/precision lever).
     ``num_threads`` (openvino only) caps CPU threads per detector so multiple
@@ -469,6 +627,15 @@ def create_detector(
             suppress_biometrics=suppress_biometrics,
             class_map=class_map,
             keep_classes=keep,
+        )
+    if backend == "yolox":
+        return YoloxDetector(
+            model_path=model,
+            conf=conf,
+            suppress_biometrics=suppress_biometrics,
+            class_map=class_map,
+            keep_classes=keep,
+            num_threads=num_threads,
         )
     if backend == "openvino":
         return OpenVINODetector(

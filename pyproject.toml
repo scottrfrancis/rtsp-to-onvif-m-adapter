@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 # Distribution name on PyPI; the importable package is `onvif_m`.
 name = "onvif-m-producer"
-version = "0.2.3"
+version = "0.2.4"
 description = "RTSP → object detection → ONVIF Profile-M metadata producer"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -36,6 +36,9 @@ capture = ["numpy", "pillow"]
 detect = ["torch", "torchvision", "pillow", "numpy"]
 # OpenVINO-FP32 backend (OpenVINODetector) — converts the torchvision model to OV IR.
 openvino = ["openvino", "torch", "torchvision", "numpy", "pillow"]
+# YOLOX backend (YoloxDetector) — single-stage, Apache-2.0, pure ONNX Runtime + numpy.
+# No torch/torchvision. The lightweight, crash-free CPU path.
+yolox = ["onnxruntime", "numpy", "pillow"]
 mqtt = ["paho-mqtt>=2.0"]
 compliance = ["xmlschema>=3.0", "jsonschema>=4.0"]
 dev = ["pytest", "pytest-asyncio", "ruff", "mypy", "xmlschema>=3.0",

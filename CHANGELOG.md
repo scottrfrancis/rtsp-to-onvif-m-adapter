@@ -3,6 +3,18 @@
 Format loosely follows [Keep a Changelog](https://keepachangelog.com); versions
 follow [SemVer](https://semver.org).
 
+## [0.2.4]
+
+### Added
+- **YOLOX backend** (`backend="yolox"`, opt-in). Single-stage detector run via **ONNX
+  Runtime (CPU)** — pure ONNX Runtime + numpy, no torch/torchvision. Being single-stage
+  it is **immune to the two-stage `roi_heads` reshape crash** that rules out traced
+  Faster R-CNN at reduced resolution, and it is **Apache-2.0** (unlike AGPL Ultralytics).
+  `model` is a path to a YOLOX `.onnx` (416 for nano/tiny, 640 for s/m/l/x). Honors
+  `keep_classes` (person-only) and `num_threads` (ORT intra-op cap for multi-camera
+  packing). New extra `.[yolox]` = `onnxruntime, numpy, pillow`. Public helpers
+  `yolox_decode` + `_COCO80`.
+
 ## [0.2.3]
 
 ### Added
