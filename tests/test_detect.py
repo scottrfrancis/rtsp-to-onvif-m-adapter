@@ -86,8 +86,10 @@ class TestTorchvisionMapping:
         assert objs[0].classes[0].type == "Human"  # the kept person
 
     def test_keep_classes_none_keeps_all(self):
-        out = {"boxes": [[10, 10, 20, 20], [30, 30, 40, 40]], "labels": [1, 3], "scores": [0.9, 0.9]}
-        assert len(torchvision_to_objects(out, 100, 100, COCO_CATS, keep_classes=None)) == 2
+        out = {"boxes": [[10, 10, 20, 20], [30, 30, 40, 40]],
+               "labels": [1, 3], "scores": [0.9, 0.9]}
+        objs = torchvision_to_objects(out, 100, 100, COCO_CATS, keep_classes=None)
+        assert len(objs) == 2
 
 
 class _FakeBox:
