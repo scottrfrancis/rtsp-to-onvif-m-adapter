@@ -113,17 +113,23 @@ def torchvision_to_objects(
     categories: list[str],
     conf_floor: float = 0.0,
     class_map: dict[str, str] | None = None,
+    keep_classes: set[str] | None = None,
 ) -> list[DetectedObject]:
     """Project a torchvision detection ``output`` (parallel boxes/labels/scores,
-    pixel xyxy; ``categories`` indexed by label id) into ONVIF objects."""
+    pixel xyxy; ``categories`` indexed by label id) into ONVIF objects.
+    ``keep_classes`` (lowercased raw labels, e.g. ``{"person"}``) drops everything
+    else — an allowlist applied before mapping to ONVIF classes."""
     objects: list[DetectedObject] = []
     oid = 0
     for box, label, score in zip(output["boxes"], output["labels"], output["scores"], strict=False):
         conf = float(score)
         if conf < conf_floor:
             continue
+        raw = str(categories[int(label)])
+        if keep_classes is not None and raw.lower() not in keep_classes:
+            continue
         x1, y1, x2, y2 = (float(v) for v in box)
-        objects.append(_object(oid, str(categories[int(label)]), conf,
+        objects.append(_object(oid, raw, conf,
                                x1, y1, x2, y2, width, height, class_map))
         oid += 1
     return objects
@@ -133,9 +139,11 @@ def yolo_to_objects(
     result: Any,
     conf_floor: float = 0.0,
     class_map: dict[str, str] | None = None,
+    keep_classes: set[str] | None = None,
 ) -> list[DetectedObject]:
     """Project one ultralytics ``Results`` (per-box ``xyxy``/``conf``/``cls``;
-    ``result.names`` id→label; ``result.orig_shape`` = (H, W)) into ONVIF objects."""
+    ``result.names`` id→label; ``result.orig_shape`` = (H, W)) into ONVIF objects.
+    ``keep_classes`` (lowercased raw labels) is an allowlist; others are dropped."""
     height, width = result.orig_shape
     names = result.names
     objects: list[DetectedObject] = []
@@ -144,8 +152,11 @@ def yolo_to_objects(
         conf = float(box.conf[0])
         if conf < conf_floor:
             continue
+        raw = str(names[int(box.cls[0])])
+        if keep_classes is not None and raw.lower() not in keep_classes:
+            continue
         x1, y1, x2, y2 = (float(v) for v in box.xyxy[0])
-        objects.append(_object(oid, str(names[int(box.cls[0])]), conf,
+        objects.append(_object(oid, raw, conf,
                                x1, y1, x2, y2, width, height, class_map))
         oid += 1
     return objects
@@ -158,9 +169,11 @@ class MockDetector:
         self,
         objects: list[DetectedObject] | None = None,
         suppress_biometrics: bool = True,
+        keep_classes: set[str] | None = None,
     ):
         self._objects = objects or []
         self._suppress_biometrics = suppress_biometrics
+        self._keep_classes = keep_classes  # accepted for API parity (unused by mock)
 
     def detect(self, frame: Any) -> list[DetectedObject]:
         return self._objects
@@ -182,12 +195,14 @@ class TorchvisionDetector:
         device: str = "auto",
         min_size: int | None = None,
         max_size: int | None = None,
+        keep_classes: set[str] | None = None,
         _model: Any | None = None,
         _categories: list[str] | None = None,
     ):
         self._conf = conf
         self._suppress_biometrics = suppress_biometrics
         self._class_map = class_map
+        self._keep_classes = keep_classes
         # Optional resolution knob for FPN/R-CNN-style detectors: overrides the
         # model's internal GeneralizedRCNNTransform min/max (the real cost lever).
         # Left as None for fixed-size models (e.g. ssd/ssdlite).
@@ -240,7 +255,8 @@ class TorchvisionDetector:
             "scores": out["scores"].cpu().tolist(),
         }
         return torchvision_to_objects(
-            plain, width, height, self._categories, self._conf, self._class_map
+            plain, width, height, self._categories, self._conf, self._class_map,
+            self._keep_classes,
         )
 
     @property
@@ -257,11 +273,13 @@ class Yolov8Detector:
         conf: float = 0.25,
         suppress_biometrics: bool = True,
         class_map: dict[str, str] | None = None,
+        keep_classes: set[str] | None = None,
         _model: Any | None = None,
     ):
         self._conf = conf
         self._suppress_biometrics = suppress_biometrics
         self._class_map = class_map
+        self._keep_classes = keep_classes
         if _model is not None:
             self._model = _model
             return
@@ -276,7 +294,7 @@ class Yolov8Detector:
 
     def detect(self, frame: Any) -> list[DetectedObject]:
         result = self._model(frame, verbose=False)[0]
-        return yolo_to_objects(result, self._conf, self._class_map)
+        return yolo_to_objects(result, self._conf, self._class_map, self._keep_classes)
 
     @property
     def suppress_biometrics(self) -> bool:
@@ -303,12 +321,14 @@ class OpenVINODetector:
         min_size: int | None = None,
         max_size: int | None = None,
         num_threads: int = 0,
+        keep_classes: set[str] | None = None,
         _compiled: Any | None = None,
         _categories: list[str] | None = None,
     ):
         self._conf = conf
         self._suppress_biometrics = suppress_biometrics
         self._class_map = class_map
+        self._keep_classes = keep_classes
         self._min_size = min_size
         self._max_size = max_size
         self._num_threads = num_threads
@@ -386,7 +406,8 @@ class OpenVINODetector:
             "scores": np.asarray(res[2]).tolist(),
         }
         return torchvision_to_objects(
-            plain, width, height, self._categories, self._conf, self._class_map
+            plain, width, height, self._categories, self._conf, self._class_map,
+            self._keep_classes,
         )
 
     @property
@@ -416,6 +437,7 @@ def create_detector(
     min_size: int | None = None,
     max_size: int | None = None,
     num_threads: int = 0,
+    keep_classes: list[str] | None = None,
 ) -> Detector:
     """Factory. ``backend`` ∈ {``mock``, ``torchvision`` (default), ``yolov8``,
     ``openvino``}. ``device`` ∈ {``auto``, ``cpu``, ``cuda``, ``mps``} (torchvision).
@@ -423,9 +445,12 @@ def create_detector(
     torchvision and openvino backends (the cost/precision lever).
     ``num_threads`` (openvino only) caps CPU threads per detector so multiple
     detectors pack onto a multi-camera box instead of each grabbing every core;
-    0 (default) keeps the LATENCY hint (best single-camera)."""
+    0 (default) keeps the LATENCY hint (best single-camera).
+    ``keep_classes`` is an allowlist of raw model labels (e.g. ``["person"]``);
+    detections of any other class are dropped. ``None`` keeps all classes."""
+    keep = {c.lower() for c in keep_classes} if keep_classes else None
     if backend == "mock":
-        return MockDetector(suppress_biometrics=suppress_biometrics)
+        return MockDetector(suppress_biometrics=suppress_biometrics, keep_classes=keep)
     if backend == "torchvision":
         return TorchvisionDetector(
             model_name=model,
@@ -435,6 +460,7 @@ def create_detector(
             device=device,
             min_size=min_size,
             max_size=max_size,
+            keep_classes=keep,
         )
     if backend == "yolov8":
         return Yolov8Detector(
@@ -442,6 +468,7 @@ def create_detector(
             conf=conf,
             suppress_biometrics=suppress_biometrics,
             class_map=class_map,
+            keep_classes=keep,
         )
     if backend == "openvino":
         return OpenVINODetector(
@@ -452,6 +479,7 @@ def create_detector(
             min_size=min_size,
             max_size=max_size,
             num_threads=num_threads,
+            keep_classes=keep,
         )
     factory = plugins.load_plugin(plugins.DETECTORS, backend)
     if factory is not None:

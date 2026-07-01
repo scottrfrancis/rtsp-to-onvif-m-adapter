@@ -73,6 +73,24 @@ class TestTorchvisionMapping:
         objs = torchvision_to_objects(out, 100, 100, COCO_CATS, class_map={"person": "Caregiver"})
         assert objs[0].classes[0].type == "Caregiver"
 
+    def test_keep_classes_person_only(self):
+        # person + car + bicycle in; keep_classes={"person"} keeps only the person.
+        out = {
+            "boxes": [[10, 10, 20, 20], [30, 30, 40, 40], [50, 50, 60, 60]],
+            "labels": [1, 3, 2],  # person, car, bicycle
+            "scores": [0.9, 0.9, 0.9],
+        }
+        objs = torchvision_to_objects(out, 100, 100, COCO_CATS, keep_classes={"person"})
+        assert len(objs) == 1
+        assert objs[0].object_id == 0            # re-indexed from 0
+        assert objs[0].classes[0].type == "Human"  # the kept person
+
+    def test_keep_classes_none_keeps_all(self):
+        out = {"boxes": [[10, 10, 20, 20], [30, 30, 40, 40]],
+               "labels": [1, 3], "scores": [0.9, 0.9]}
+        objs = torchvision_to_objects(out, 100, 100, COCO_CATS, keep_classes=None)
+        assert len(objs) == 2
+
 
 class _FakeBox:
     def __init__(self, xyxy, conf, cls):

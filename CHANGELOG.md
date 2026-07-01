@@ -3,6 +3,15 @@
 Format loosely follows [Keep a Changelog](https://keepachangelog.com); versions
 follow [SemVer](https://semver.org).
 
+## [0.2.3]
+
+### Added
+- **`keep_classes` allowlist** on `create_detector` and every backend. Pass e.g.
+  `keep_classes=["person"]` to emit only those raw model labels and drop the rest —
+  applied before ONVIF-class mapping, so downstream sidecars carry only the classes
+  the application cares about. `None` (default) keeps all classes; behavior unchanged
+  for existing callers.
+
 ## [0.2.2]
 
 ### Fixed
