@@ -67,6 +67,12 @@ files = ["src"]
 module = ["torch.*", "torchvision.*", "ultralytics.*", "openvino", "openvino.*"]
 ignore_missing_imports = true
 
+# In the lint/type-check env torch isn't installed, so ``torch.nn.Module`` is Any;
+# allow the OpenVINODetector's tracing wrapper to subclass it there.
+[[tool.mypy.overrides]]
+module = ["onvif_m.detect"]
+disallow_subclassing_any = false
+
 # numpy's bundled stubs use PEP 695 `type` syntax (3.12+); don't parse them
 # under our 3.11 target. We treat frames as untyped arrays regardless.
 [[tool.mypy.overrides]]
