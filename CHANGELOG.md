@@ -3,6 +3,16 @@
 Format loosely follows [Keep a Changelog](https://keepachangelog.com); versions
 follow [SemVer](https://semver.org).
 
+## [0.2.2]
+
+### Fixed
+- **Thread-safe model compilation.** `torch.jit.trace` / `ov.convert_model` are not
+  thread-safe; two `OpenVINODetector`s compiling their IR concurrently (a multi-camera
+  host starting N detectors at once) corrupted each other's trace and raised
+  `The values for attribute 'dtype' do not match: torch.float64 != torch.float32`,
+  killing the detector threads. Compilation is now serialized process-wide with a
+  module lock (double-checked); inference on an already-compiled model stays parallel.
+
 ## [0.2.1]
 
 ### Added

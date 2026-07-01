@@ -44,6 +44,31 @@ def test_openvino_num_threads_reaches_compiled_model():
     assert det._compiled.get_property("INFERENCE_NUM_THREADS") == 1
 
 
+def test_concurrent_compile_is_serialized():
+    """Two detectors compiling their IR at the same instant must both succeed —
+    torch.jit.trace/ov.convert_model aren't thread-safe, so _COMPILE_LOCK serializes
+    them. Without the lock this raises 'dtype float64 != float32'. Regression for the
+    multi-camera startup crash."""
+    import threading
+    frame = _frame(1080, 1920)
+    results: dict[int, str] = {}
+
+    def work(i: int) -> None:
+        try:
+            det = create_detector(backend="openvino",
+                                  model="fasterrcnn_mobilenet_v3_large_fpn",
+                                  min_size=640, max_size=1024, conf=0.25, device="cpu")
+            det.detect(frame)          # concurrent first-frame compile
+            results[i] = "ok"
+        except Exception as e:         # noqa: BLE001 - record any failure
+            results[i] = f"fail: {e}"
+
+    threads = [threading.Thread(target=work, args=(i,)) for i in range(3)]
+    for t in threads: t.start()
+    for t in threads: t.join()
+    assert all(v == "ok" for v in results.values()), results
+
+
 def test_openvino_and_torch_agree_on_object_count():
     """FP32 OV should be numerically ~equal to eager torch (same detections)."""
     frame = _frame()
