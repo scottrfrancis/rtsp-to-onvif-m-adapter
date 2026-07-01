@@ -4,6 +4,7 @@ import pytest
 
 from onvif_m.detect import (
     MockDetector,
+    TorchvisionDetector,
     Yolov8Detector,
     create_detector,
     onvif_class,
@@ -87,6 +88,15 @@ class _FakeResult:
         self.boxes = boxes
 
 
+class _FakeCompiled:
+    """Stands in for an OpenVINO CompiledModel: callable → [boxes, labels, scores]."""
+    def __init__(self, boxes, labels, scores):
+        self._out = [boxes, labels, scores]
+
+    def __call__(self, inputs):
+        return self._out
+
+
 class TestYoloMapping:
     def test_maps_person(self):
         result = _FakeResult((480, 640), {0: "person"},
@@ -122,3 +132,54 @@ class TestMockAndFactory:
         out = det.detect(object())
         assert out[0].classes[0].type == "Human"
         assert det.suppress_biometrics is False
+
+
+class TestMinMaxPassthrough:
+    """v0.2.0: TorchvisionDetector accepts min_size/max_size (the resolution knob)."""
+
+    def test_torchvision_stores_min_max(self):
+        det = TorchvisionDetector(_model=object(), _categories=COCO_CATS,
+                                  min_size=800, max_size=1333)
+        assert det.min_size == 800
+        assert det.max_size == 1333
+
+    def test_torchvision_min_max_default_none(self):
+        det = TorchvisionDetector(_model=object(), _categories=COCO_CATS)
+        assert det.min_size is None
+        assert det.max_size is None
+
+
+class TestOpenVINODetector:
+    """v0.2.0: OpenVINO-FP32 backend. Unit tests use an injected CompiledModel so
+    they need neither torch nor openvino — only numpy for the frame tensor prep."""
+
+    def test_maps_via_injected_compiled(self):
+        np = pytest.importorskip("numpy")
+        from onvif_m.detect import OpenVINODetector
+
+        fake = _FakeCompiled(boxes=[[64.0, 48.0, 192.0, 240.0]], labels=[1], scores=[0.93])
+        det = OpenVINODetector(_compiled=fake, _categories=COCO_CATS, suppress_biometrics=True)
+        objs = det.detect(np.zeros((480, 640, 3), dtype=np.uint8))
+        assert len(objs) == 1
+        assert objs[0].classes[0].type == "Human"
+        assert objs[0].classes[0].likelihood == pytest.approx(0.93)
+        assert det.suppress_biometrics is True
+
+    def test_conf_floor_filters(self):
+        np = pytest.importorskip("numpy")
+        from onvif_m.detect import OpenVINODetector
+
+        fake = _FakeCompiled(boxes=[[10, 10, 20, 20], [30, 30, 40, 40]],
+                             labels=[1, 3], scores=[0.10, 0.80])
+        det = OpenVINODetector(_compiled=fake, _categories=COCO_CATS, conf=0.25)
+        objs = det.detect(np.zeros((100, 100, 3), dtype=np.uint8))
+        assert len(objs) == 1
+        assert objs[0].classes[0].type == "Vehicle"
+
+    def test_stores_min_max(self):
+        from onvif_m.detect import OpenVINODetector
+
+        det = OpenVINODetector(_compiled=_FakeCompiled([], [], []), _categories=COCO_CATS,
+                               min_size=800, max_size=1333)
+        assert det.min_size == 800
+        assert det.max_size == 1333

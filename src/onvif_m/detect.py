@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 
 # Detector backends shipped in core; third-party backends register via the
 # ``onvif_m.detectors`` entry-point group (see ``plugins``).
-BUILTIN_DETECTORS = ["mock", "torchvision", "yolov8"]
+BUILTIN_DETECTORS = ["mock", "torchvision", "yolov8", "openvino"]
 
 # COCO class label → ONVIF ObjectClass. Unmapped labels are Title-cased.
 COCO_TO_ONVIF: dict[str, str] = {
@@ -54,6 +54,17 @@ def resolve_device(requested: str, *, cuda: bool, mps: bool) -> str:
     if mps:
         return "mps"
     return "cpu"
+
+
+def _size_kwargs(min_size: int | None, max_size: int | None) -> dict[str, int]:
+    """torchvision ``get_model`` kwargs for the FPN/R-CNN input-resize knob.
+    Only emitted when set, so default behavior and fixed-size models are untouched."""
+    kw: dict[str, int] = {}
+    if min_size is not None:
+        kw["min_size"] = min_size
+    if max_size is not None:
+        kw["max_size"] = max_size
+    return kw
 
 
 @runtime_checkable
@@ -161,12 +172,19 @@ class TorchvisionDetector:
         suppress_biometrics: bool = True,
         class_map: dict[str, str] | None = None,
         device: str = "auto",
+        min_size: int | None = None,
+        max_size: int | None = None,
         _model: Any | None = None,
         _categories: list[str] | None = None,
     ):
         self._conf = conf
         self._suppress_biometrics = suppress_biometrics
         self._class_map = class_map
+        # Optional resolution knob for FPN/R-CNN-style detectors: overrides the
+        # model's internal GeneralizedRCNNTransform min/max (the real cost lever).
+        # Left as None for fixed-size models (e.g. ssd/ssdlite).
+        self._min_size = min_size
+        self._max_size = max_size
         if _model is not None:
             self._model = _model
             self._categories = _categories or []
@@ -181,15 +199,25 @@ class TorchvisionDetector:
             device, cuda=torch.cuda.is_available(), mps=torch.backends.mps.is_available()
         )
         weights = torchvision.models.get_model_weights(model_name).DEFAULT
-        logger.info("loading torchvision %s on device=%s (conf>=%.2f)",
-                    model_name, self._device, conf)
-        self._model = torchvision.models.get_model(model_name, weights=weights)
+        logger.info("loading torchvision %s on device=%s (conf>=%.2f, min/max=%s/%s)",
+                    model_name, self._device, conf, min_size, max_size)
+        self._model = torchvision.models.get_model(
+            model_name, weights=weights, **_size_kwargs(min_size, max_size)
+        )
         self._model.eval().to(self._device)
         self._categories = list(weights.meta["categories"])
 
     @property
     def device(self) -> str:
         return self._device
+
+    @property
+    def min_size(self) -> int | None:
+        return self._min_size
+
+    @property
+    def max_size(self) -> int | None:
+        return self._max_size
 
     def detect(self, frame: Any) -> list[DetectedObject]:
         import torch
@@ -247,6 +275,112 @@ class Yolov8Detector:
         return self._suppress_biometrics
 
 
+class OpenVINODetector:
+    """Opt-in OpenVINO-FP32 backend for torchvision COCO detectors.
+
+    Converts the torchvision model to OpenVINO IR at load and runs it on the
+    OpenVINO ``CPU`` device (``LATENCY`` hint) — ~1.7–2.2× faster than eager
+    torch on AVX2 CPUs. Output mapping reuses :func:`torchvision_to_objects`
+    (same COCO categories, pixel xyxy). The IR is compiled lazily on the first
+    frame, at that frame's resolution. Needs ``.[openvino]``. INT8 is not offered
+    — it is slower on CPUs without VNNI.
+    """
+
+    def __init__(
+        self,
+        model_name: str = "fasterrcnn_mobilenet_v3_large_fpn",
+        conf: float = 0.25,
+        suppress_biometrics: bool = True,
+        class_map: dict[str, str] | None = None,
+        min_size: int | None = None,
+        max_size: int | None = None,
+        _compiled: Any | None = None,
+        _categories: list[str] | None = None,
+    ):
+        self._conf = conf
+        self._suppress_biometrics = suppress_biometrics
+        self._class_map = class_map
+        self._min_size = min_size
+        self._max_size = max_size
+        self._compiled: Any = _compiled
+        self._core: Any = None
+        self._wrapped: Any = None
+        if _compiled is not None:
+            self._categories = _categories or []
+            return
+        try:
+            import openvino as ov
+            import torch
+            import torchvision
+        except ImportError as exc:  # pragma: no cover - import guard
+            raise ImportError(
+                "OpenVINO backend needs torch + torchvision + openvino: "
+                "pip install '.[openvino]'"
+            ) from exc
+
+        weights = torchvision.models.get_model_weights(model_name).DEFAULT
+        model = torchvision.models.get_model(
+            model_name, weights=weights, **_size_kwargs(min_size, max_size)
+        ).eval()
+        self._categories = list(weights.meta["categories"])
+
+        class _DetWrap(torch.nn.Module):
+            # Single 4D tensor in → plain (boxes, labels, scores) tensors out:
+            # normalizes the list[Tensor]→list[dict] signature that trips the tracer.
+            def __init__(self, m: Any) -> None:
+                super().__init__()
+                self.m = m
+
+            def forward(self, x: Any) -> Any:  # x: (1,3,H,W)
+                o = self.m([x[0]])[0]
+                return o["boxes"], o["labels"], o["scores"]
+
+        self._wrapped = _DetWrap(model).eval()
+        self._core = ov.Core()
+        logger.info("openvino backend ready for %s (min/max=%s/%s); IR compiled on first frame",
+                    model_name, min_size, max_size)
+
+    def _ensure_compiled(self, height: int, width: int) -> None:
+        if self._compiled is not None:
+            return
+        import openvino as ov
+        import torch
+
+        example = torch.zeros(1, 3, height, width)
+        ov_model = ov.convert_model(self._wrapped, example_input=example)
+        self._compiled = self._core.compile_model(
+            ov_model, "CPU", {"PERFORMANCE_HINT": "LATENCY"}
+        )
+
+    def detect(self, frame: Any) -> list[DetectedObject]:
+        import numpy as np
+
+        height, width = frame.shape[:2]
+        self._ensure_compiled(height, width)
+        x = (frame.astype("float32") / 255.0).transpose(2, 0, 1)[None]  # (1,3,H,W)
+        res = self._compiled([x])
+        plain = {
+            "boxes": np.asarray(res[0]).tolist(),
+            "labels": np.asarray(res[1]).tolist(),
+            "scores": np.asarray(res[2]).tolist(),
+        }
+        return torchvision_to_objects(
+            plain, width, height, self._categories, self._conf, self._class_map
+        )
+
+    @property
+    def suppress_biometrics(self) -> bool:
+        return self._suppress_biometrics
+
+    @property
+    def min_size(self) -> int | None:
+        return self._min_size
+
+    @property
+    def max_size(self) -> int | None:
+        return self._max_size
+
+
 def create_detector(
     backend: str = "torchvision",
     model: str = "ssdlite320_mobilenet_v3_large",
@@ -254,9 +388,13 @@ def create_detector(
     suppress_biometrics: bool = True,
     class_map: dict[str, str] | None = None,
     device: str = "auto",
+    min_size: int | None = None,
+    max_size: int | None = None,
 ) -> Detector:
-    """Factory. ``backend`` ∈ {``mock``, ``torchvision`` (default), ``yolov8``}.
-    ``device`` ∈ {``auto``, ``cpu``, ``cuda``, ``mps``} (torchvision backend)."""
+    """Factory. ``backend`` ∈ {``mock``, ``torchvision`` (default), ``yolov8``,
+    ``openvino``}. ``device`` ∈ {``auto``, ``cpu``, ``cuda``, ``mps``} (torchvision).
+    ``min_size``/``max_size`` set the model's input-resize resolution for the
+    torchvision and openvino backends (the cost/precision lever)."""
     if backend == "mock":
         return MockDetector(suppress_biometrics=suppress_biometrics)
     if backend == "torchvision":
@@ -266,6 +404,8 @@ def create_detector(
             suppress_biometrics=suppress_biometrics,
             class_map=class_map,
             device=device,
+            min_size=min_size,
+            max_size=max_size,
         )
     if backend == "yolov8":
         return Yolov8Detector(
@@ -273,6 +413,15 @@ def create_detector(
             conf=conf,
             suppress_biometrics=suppress_biometrics,
             class_map=class_map,
+        )
+    if backend == "openvino":
+        return OpenVINODetector(
+            model_name=model,
+            conf=conf,
+            suppress_biometrics=suppress_biometrics,
+            class_map=class_map,
+            min_size=min_size,
+            max_size=max_size,
         )
     factory = plugins.load_plugin(plugins.DETECTORS, backend)
     if factory is not None:
