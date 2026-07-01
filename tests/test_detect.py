@@ -215,3 +215,70 @@ class TestOpenVINODetector:
         det = OpenVINODetector(_compiled=_FakeCompiled([], [], []), _categories=COCO_CATS,
                                num_threads=1)
         assert det.num_threads == 1
+
+
+class _FakeOrtSession:
+    """Stand-in ORT session: ignores the input, returns a crafted YOLOX head."""
+    def __init__(self, out, size=64):
+        self._out = out
+        self._size = size
+    def get_inputs(self):
+        size = self._size
+        class _I:
+            name = "images"
+            shape = [1, 3, size, size]
+        return [_I()]
+    def run(self, _names, _feed):
+        import numpy as np
+        return [np.asarray(self._out)[None]]  # [1, N, 85]
+
+
+def _yolox_head(size=64, cls_index=0, obj=0.9, cls=0.9):
+    """One high-scoring detection in the first (stride-8, grid 0,0) anchor."""
+    np = pytest.importorskip("numpy")
+    ng = (size // 8) ** 2 + (size // 16) ** 2 + (size // 32) ** 2
+    out = np.zeros((ng, 85), dtype=np.float32)
+    out[:, 4] = 0.001                               # obj low everywhere
+    out[:, 5:] = 0.001                              # cls low everywhere
+    out[0, :2] = 0.5                                # center in first cell
+    out[0, 2:4] = 0.0                               # wh = stride
+    out[0, 4] = obj
+    out[0, 5 + cls_index] = cls
+    return out
+
+
+class TestYoloxDecode:
+    def test_decode_person_maps_to_human(self):
+        pytest.importorskip("numpy")
+        from onvif_m.detect import _COCO80, yolox_decode
+        objs = yolox_decode(_yolox_head(cls_index=0), 64, 1.0, 64, 64, 0.25,
+                            _COCO80, keep_classes={"person"})
+        assert len(objs) == 1
+        assert objs[0].classes[0].type == "Human"
+        assert objs[0].classes[0].likelihood == pytest.approx(0.81, abs=1e-3)
+
+    def test_keep_classes_drops_non_person(self):
+        pytest.importorskip("numpy")
+        from onvif_m.detect import _COCO80, yolox_decode
+        # bicycle (index 1) high, but person-only allowlist drops it
+        objs = yolox_decode(_yolox_head(cls_index=1), 64, 1.0, 64, 64, 0.25,
+                            _COCO80, keep_classes={"person"})
+        assert len(objs) == 0
+
+    def test_conf_floor_filters(self):
+        pytest.importorskip("numpy")
+        from onvif_m.detect import _COCO80, yolox_decode
+        objs = yolox_decode(_yolox_head(obj=0.2, cls=0.2), 64, 1.0, 64, 64, 0.25, _COCO80)
+        assert len(objs) == 0  # score 0.04 < 0.25
+
+
+class TestYoloxDetector:
+    def test_detect_via_injected_session(self):
+        np = pytest.importorskip("numpy")
+        from onvif_m.detect import YoloxDetector
+        det = YoloxDetector(_session=_FakeOrtSession(_yolox_head(), size=64),
+                            keep_classes={"person"})
+        assert det.input_size == 64
+        objs = det.detect(np.zeros((64, 64, 3), dtype=np.uint8))
+        assert len(objs) == 1 and objs[0].classes[0].type == "Human"
+        assert det.suppress_biometrics is True
