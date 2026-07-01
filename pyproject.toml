@@ -67,7 +67,7 @@ files = ["src"]
 # environment (they live in the `detect` extra), so treat them as untyped
 # rather than failing on a missing import.
 [[tool.mypy.overrides]]
-module = ["torch.*", "torchvision.*", "ultralytics.*", "openvino", "openvino.*"]
+module = ["torch.*", "torchvision.*", "ultralytics.*", "openvino", "openvino.*", "onnxruntime", "onnxruntime.*"]
 ignore_missing_imports = true
 
 # In the lint/type-check env torch isn't installed, so ``torch.nn.Module`` is Any;
