@@ -64,8 +64,10 @@ def test_concurrent_compile_is_serialized():
             results[i] = f"fail: {e}"
 
     threads = [threading.Thread(target=work, args=(i,)) for i in range(3)]
-    for t in threads: t.start()
-    for t in threads: t.join()
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
     assert all(v == "ok" for v in results.values()), results
 
 
